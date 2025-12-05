@@ -38,6 +38,8 @@ MANIFEST
 # Application Data
 history.json
 summaries/
+*.log
+*.db
 
 # User Configuration (Optional: exclude actual config, keep example)
 papers.json

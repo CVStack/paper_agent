@@ -1,0 +1,17 @@
+
+# Core dependencies for the paper agent
+
+# For Google Gemini API
+google-generativeai
+
+# For Semantic Scholar API and PDF downloads (async)
+aiohttp
+
+# For PDF text extraction
+pypdf
+
+# For loading environment variables from .env file
+python-dotenv
+
+# Used by Gemini SDK, but good to have explicit
+requests
