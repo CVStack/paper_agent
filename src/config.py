@@ -33,10 +33,10 @@ INITIAL_RETRY_DELAY = int(os.getenv("INITIAL_RETRY_DELAY", 1))
 
 # --- Model Names ---
 # Model for structuring raw text and for classification
-STRUCTURING_MODEL_NAME = os.getenv("STRUCTURING_MODEL", "gemini-1.5-flash-latest")
-CLASSIFICATION_MODEL_NAME = os.getenv("CLASSIFICATION_MODEL", "gemini-1.5-flash-latest")
+STRUCTURING_MODEL_NAME = os.getenv("STRUCTURING_MODEL", "gemini-2.5-flash")
+CLASSIFICATION_MODEL_NAME = os.getenv("CLASSIFICATION_MODEL", "gemini-2.5-flash")
 # More powerful model for summarization
-SUMMARIZATION_MODEL_NAME = os.getenv("SUMMARIZATION_MODEL", "gemini-1.5-pro-latest")
+SUMMARIZATION_MODEL_NAME = os.getenv("SUMMARIZATION_MODEL", "gemini-2.5-pro")
 
 # --- PDF Processing ---
 # Maximum characters to extract from a PDF to avoid excessive token usage

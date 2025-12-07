@@ -1,4 +1,3 @@
-
 import asyncio
 import json
 import logging
@@ -13,6 +12,25 @@ from src.processing import document_parser
 from src.storage import database
 
 logger = logging.getLogger(__name__)
+
+SURVEY_KEYWORDS = [
+    "survey", "review", "overview", "roadmap", 
+    "state of the art", "state-of-the-art", 
+    "comprehensive study", "meta-analysis"
+]
+
+def _is_survey_paper(paper):
+    # 1. 메타데이터 체크
+    pub_types = paper.get('publicationTypes') or []
+    if 'Review' in pub_types:
+        return True
+        
+    # 2. 제목 키워드 체크
+    title = paper.get('title', '').lower()
+    if any(keyword in title for keyword in SURVEY_KEYWORDS):
+        return True
+        
+    return False
 
 def load_papers_config():
     """papers.json 설정 파일을 로드합니다."""
@@ -32,7 +50,7 @@ def save_summary_to_md(paper, summary, target_paper_alias, classification):
         filename = "_base_summary.md"
     else:
         output_dir = os.path.join(config.SUMMARY_DIR, target_paper_alias, classification)
-        safe_title = re.sub(r'[\\/*?:":<>|]', "", paper['title'])
+        safe_title = re.sub(r'[\\/*?:"<>|]', "", paper['title'])
         filename = f"{safe_title} ({paper.get('year', 'N/A')}).md"
 
     os.makedirs(output_dir, exist_ok=True)
@@ -53,13 +71,19 @@ async def process_citing_paper(session, conn, citing_paper, target_paper_details
     paper_title = citing_paper.get('title', 'N/A')
 
     if not paper_id:
-        logger.warning(f"ID가 없는 인용 논문을 건너뜁니다: {paper_title}")
+        logger.warning(f"ID가 없는 인용 논문을 건너웁니다: {paper_title}")
+        return
+
+    # [NEW] 서베이 논문 필터링
+    if _is_survey_paper(citing_paper):
+        logger.info(f"'{paper_title}' - 서베이 논문으로 감지되어 처리를 건너뜁니다.")
+        database.record_failure(conn, paper_id, "Skipped: Survey/Review Paper") 
         return
 
     try:
-        # --- 1단계 분류 ---
+        # --- 1단계 분류 (Fast Filter) ---
         api_abstract = citing_paper.get('abstract')
-        first_pass_class = "uncertain"
+        first_pass_class = "other"
 
         if api_abstract:
             # 경로 A: API 초록이 있을 경우
@@ -84,44 +108,50 @@ async def process_citing_paper(session, conn, citing_paper, target_paper_details
 
         logger.info(f"'{paper_title}' 1차 분류 결과: {first_pass_class}")
         
-        # --- 2단계 분류 (필요 시) ---
-        classification = "other"
-        structured_text = None
-
-        if first_pass_class == "uncertain":
-            logger.info(f"'{paper_title}' 2단계 정밀 분석 진행...")
-            try:
-                # 전체 Raw Text 추출
-                full_raw_text = await document_parser.extract_raw_text(session, citing_paper)
-                if not citing_paper.get('abstract'): # 스니펫에서도 초록을 못가져온 경우
-                    citing_paper['abstract'] = full_raw_text[:1500]
-
-                # 텍스트 구조화 (비용 발생)
-                structured_text = await document_parser.structure_text(full_raw_text)
-                
-                # 최종 분류
-                classification = await gemini.full_text_classify(
-                    target_paper_details, citing_paper, structured_text
-                )
-            except document_parser.PDFExtractionError as e:
-                logger.error(f"'{paper_title}' 논문 처리 실패 (2차 분류용 텍스트 추출): {e}")
-                database.record_failure(conn, paper_id, str(e))
-                return
-        else: # 'same_task'
-            logger.info(f"'{paper_title}' 1차 분류 통과, 2단계 분석을 건너뜁니다.")
-            classification = "same_task"
-
-        logger.info(f"'{paper_title}' 최종 분류 결과: {classification}")
-
-        # --- 요약 및 저장 ---
-        summary = await gemini.summarize_with_gemini(target_paper_details, citing_paper)
-        if not summary:
-            logger.warning(f"'{paper_title}' 논문 요약 생성 실패. 건너뜁니다.")
-            database.record_failure(conn, paper_id, "요약 생성 실패")
+        # [Strict Mode] 1단계에서 same_task가 아니면 즉시 종료
+        if first_pass_class != "same_task":
+            logger.info(f"'{paper_title}' - 1단계 분류 탈락 ({first_pass_class}). 처리를 종료합니다.")
+            # DB에 'filtered' 등으로 기록하거나 그냥 로그만 남기고 종료
+            # 여기서는 processed가 아니므로 다음에 다시 시도되지 않도록 failure로 기록하되 사유를 명시
+            database.record_failure(conn, paper_id, f"Filtered: {first_pass_class}")
             return
+
+        # --- 2단계: 본문 확보 및 정밀 검증 (Deep Verification) ---
+        logger.info(f"'{paper_title}' - 1단계 통과! 본문 확보 및 정밀 검증 시작.")
+        
+        try:
+            # 1. 본문 다운로드 및 구조화 (필수)
+            full_raw_text = await document_parser.extract_raw_text(session, citing_paper)
+            structured_text = await document_parser.structure_text(full_raw_text)
             
-        save_summary_to_md(citing_paper, summary, target_alias, classification)
-        database.add_paper_to_history(conn, paper_id, status='processed')
+            # 2. 2단계 정밀 분류 (Double Check)
+            final_classification = await gemini.full_text_classify(
+                target_paper_details, citing_paper, structured_text
+            )
+            
+            if final_classification != "same_task":
+                logger.info(f"'{paper_title}' - 2단계 정밀 분류 탈락. 처리를 종료합니다.")
+                database.record_failure(conn, paper_id, "Filtered: 2nd pass failed")
+                return
+
+            # --- 3단계: 심층 요약 및 저장 (High Quality Summary) ---
+            logger.info(f"'{paper_title}' - 최종 합격! 심층 요약을 생성합니다.")
+            summary = await gemini.summarize_with_gemini(
+                target_paper_details, citing_paper, full_text=structured_text
+            )
+            
+            if not summary:
+                logger.warning(f"'{paper_title}' 논문 요약 생성 실패. 건너뜁니다.")
+                database.record_failure(conn, paper_id, "요약 생성 실패")
+                return
+                
+            save_summary_to_md(citing_paper, summary, target_alias, final_classification)
+            database.add_paper_to_history(conn, paper_id, status='processed')
+
+        except document_parser.PDFExtractionError as e:
+            logger.error(f"'{paper_title}' 본문 확보 실패: {e}")
+            database.record_failure(conn, paper_id, f"PDF Error: {e}")
+            return
 
     except gemini.GeminiAPIError as e:
         logger.critical(f"'{paper_title}' 처리 중 Gemini API 오류: {e}")
@@ -146,7 +176,7 @@ async def run_cycle():
         for target_paper_config in target_papers:
             target_id = target_paper_config.get("id")
             target_alias = target_paper_config.get("alias", target_id)
-            target_alias = re.sub(r'[\\/*?:":<>|]', "", target_alias)
+            target_alias = re.sub(r'[\\/*?:"<>|]', "", target_alias)
             logger.info(f"\n>> '{target_alias}' 논문 처리 시작...")
 
             target_paper_details = await semantic_scholar.fetch_paper_details(session, target_id)
@@ -175,12 +205,19 @@ async def run_cycle():
                 logger.info(f"'{target_alias}'의 모든 신규 인용은 이미 처리되었거나 실패 목록에 있습니다.")
                 continue
             
-            logger.info(f"'{target_alias}'에 대해 처리할 신규 인용 {len(papers_to_process)}개를 발견했습니다.")
+            if config.MAX_CITATIONS_TO_PROCESS_PER_RUN == -1:
+                # -1이면 모든 논문을 처리
+                limited_papers_to_process = papers_to_process
+                logger.info(f"'{target_alias}'에 대해 제한 없이 모든 신규 인용 {len(limited_papers_to_process)}개를 처리합니다.")
+            else:
+                # 설정된 값만큼만 처리
+                limited_papers_to_process = papers_to_process[:config.MAX_CITATIONS_TO_PROCESS_PER_RUN]
+                logger.info(f"'{target_alias}'에 대해 처리할 신규 인용 {len(limited_papers_to_process)}개 (최대 {config.MAX_CITATIONS_TO_PROCESS_PER_RUN}개)를 발견했습니다.")
 
             # 동시 처리 작업 생성
             tasks = [
                 process_citing_paper(session, db_conn, paper, target_paper_details, target_alias)
-                for paper in papers_to_process[:config.MAX_CITATIONS_TO_PROCESS_PER_RUN]
+                for paper in limited_papers_to_process
             ]
             
             await asyncio.gather(*tasks)

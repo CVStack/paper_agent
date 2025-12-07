@@ -98,7 +98,7 @@ cp .env.example .env
 
 - `GEMINI_API_KEY`: Google Gemini API 키 (필수)
 - `SEMANTIC_SCHOLAR_API_KEY`: Semantic Scholar API 키 (권장, 없을 경우 속도 제한 있음)
-- `CLASSIFICATION_MODEL`: 구조화 및 분류용 모델 (기본값: `gemini-1.5-flash`)
+- `CLASSIFICATION_MODEL`: 구조화 및 분류용 모델 (기본값: `gemini-2.5-flash`)
 - `SUMMARIZATION_MODEL`: 요약용 모델 (기본값: `gemini-2.5-pro`)
 
 ### 2. 추적할 논문 등록
@@ -126,3 +126,9 @@ python agent.py
 ```
 
 스크립트가 실행되면 주기적으로(기본 1시간) 논문을 확인하고 새로운 인용이 발견되면 `summaries/` 폴더에 요약본을 저장합니다.
+
+## ✅ To-Do List
+
+1.  **1차 분류 로직 검증**: 엄격 모드 적용 및 분류 정확도 테스트.
+2.  **Summary 로직 검증**: 본문 기반 요약 품질 및 프롬프트 동작 확인.
+3.  **중간 로그 시각화 코드 구현**: 에이전트 동작 과정을 실시간으로 시각화하는 도구 개발.

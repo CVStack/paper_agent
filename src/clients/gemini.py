@@ -1,4 +1,3 @@
-
 import logging
 import json
 import google.generativeai as genai
@@ -132,18 +131,22 @@ async def full_text_classify(target_paper, citing_paper, structured_text):
     except GeminiAPIError:
         return "other" # API 오류 시 안전하게 '기타'로 처리
 
-async def summarize_with_gemini(target_paper, citing_paper):
-    """Gemini를 사용하여 논문을 요약합니다."""
+async def summarize_with_gemini(target_paper, citing_paper, full_text=None):
+    """Gemini를 사용하여 논문을 요약합니다. full_text가 있으면 이를 우선적으로 사용합니다."""
     logger.info(f"'{citing_paper.get('title', 'N/A')}' 논문 요약 중...")
     prompt_template = config.load_prompt(config.SUMMARY_PROMPT_FILE)
     if not prompt_template:
         raise GeminiAPIError("요약 프롬프트를 찾을 수 없습니다.")
 
+    # full_text가 None이면 안내 메시지 삽입
+    full_text_content = full_text if full_text else "본문 텍스트가 제공되지 않았습니다. 초록을 기반으로 요약하세요."
+
     prompt = prompt_template.format(
         target_title=target_paper.get('title', ''),
         target_abstract=target_paper.get('abstract', ''),
         title=citing_paper.get('title', ''),
-        abstract=citing_paper.get('abstract', '초록 정보 없음')
+        abstract=citing_paper.get('abstract', '초록 정보 없음'),
+        full_text=full_text_content
     )
     
     summary = await _generate_content(config.SUMMARIZATION_MODEL_NAME, prompt)

@@ -1,4 +1,3 @@
-
 # Core dependencies for the paper agent
 
 # For Google Gemini API
@@ -15,3 +14,9 @@ python-dotenv
 
 # Used by Gemini SDK, but good to have explicit
 requests
+
+# For string similarity matching (fuzzy matching)
+rapidfuzz
+
+# For searching ArXiv
+arxiv
